@@ -42,7 +42,6 @@ export class AppController {
     let jellyfinUrl = process.env.JELLYFIN_URL;
 
     let finalUrl: string;
-
     if (jellyfinUrl) {
       jellyfinUrl = jellyfinUrl.replace(/\/$/, '');
       // If JELLYFIN_URL is set, use it to replace the base of the incoming URL
@@ -55,7 +54,7 @@ export class AppController {
       // If JELLYFIN_URL is not set, use the incoming URL as is
       finalUrl = url;
     }
-
+    
     const id = await this.appService.downloadAndCombine(
       finalUrl,
       fileExtension,
@@ -119,15 +118,14 @@ export class AppController {
     }
 
     const stat = fs.statSync(filePath);
-
     res.setHeader('Content-Length', stat.size);
     res.setHeader('Content-Type', 'video/mp4');
     res.setHeader(
       'Content-Disposition',
       `attachment; filename=transcoded_${id}.mp4`,
     );
-
     const fileStream = fs.createReadStream(filePath);
+    
     this.logger.log(`Download started for ${filePath}`)
 
     return new Promise((resolve, reject) => {
