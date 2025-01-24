@@ -38,7 +38,8 @@ export class AppService {
   private maxCachedPerUser: number;
   private cacheDir: string;
   private immediateRemoval: boolean;
-
+  private forceAllDownloadsToH265: boolean;
+  
   constructor(
     private logger: Logger,
     private configService: ConfigService,
@@ -54,10 +55,17 @@ export class AppService {
       'MAX_CACHED_PER_USER',
       10,
     );
-    this.immediateRemoval = this.configService.get<boolean>(
-      'REMOVE_FILE_AFTER_RIGHT_DOWNLOAD',
-      true,
-    );
+
+    this.immediateRemoval = this.configService.get<string>('REMOVE_FILE_AFTER_RIGHT_DOWNLOAD', 'false').toLowerCase() === 'true';
+
+    this.forceAllDownloadsToH265 = this.configService.get<string>('FORCE_ALL_DOWNLOADS_TO_H265', 'false').toLowerCase() === 'true';
+  }
+
+  urlEditor(url){
+    if (this.forceAllDownloadsToH265 === true){
+      url = url.replace(/VideoCodec=h264/g, "VideoCodec=h265");
+    }
+    return url
   }
 
   async downloadAndCombine(
@@ -70,10 +78,10 @@ export class AppService {
   ): Promise<string> {
     const jobId = uuidv4();
     const outputPath = path.join(this.cacheDir, `combined_${jobId}.mp4`);
-
     this.logger.log(
       `Queueing job ${jobId.padEnd(36)} | URL: ${(url.slice(0, 50) + '...').padEnd(53)} | Path: ${outputPath}`,
     );
+    url = this.urlEditor(url)
 
     this.activeJobs.push({
       id: jobId,
