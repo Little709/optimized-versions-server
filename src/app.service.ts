@@ -39,6 +39,7 @@ export class AppService {
   private cacheDir: string;
   private immediateRemoval: boolean;
   private forceAllDownloadsToH265: boolean;
+  private maxBitrate: number;
   
   constructor(
     private logger: Logger,
@@ -63,16 +64,22 @@ export class AppService {
       'MAX_CACHED_PER_USER',
       10,
     );
-
+    this.maxBitrate = this.configService.get<number>(
+      'MAX_BITRATE',
+      2000000,
+    );
     this.immediateRemoval = this.configService.get<string>('REMOVE_FILE_AFTER_RIGHT_DOWNLOAD', 'false').toLowerCase() === 'true';
 
     this.forceAllDownloadsToH265 = this.configService.get<string>('FORCE_ALL_DOWNLOADS_TO_H265', 'false').toLowerCase() === 'true';
   }
 
-  urlEditor(url){
+  urlEditor(url: string):string{
     if (this.forceAllDownloadsToH265 === true){
-      url = url.replace(/VideoCodec=h264/g, "VideoCodec=h265");
+      url = url
+      .replace(/VideoCodec=h264/g, "VideoCodec=h265")
+      .replace(/VideoBitrate=\d+/g, `VideoBitrate=${this.maxBitrate}`);
     }
+    this.logger.error(url)
     return url
   }
 
