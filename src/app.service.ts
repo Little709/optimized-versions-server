@@ -56,14 +56,6 @@ export class AppService {
       'MAX_CACHED_PER_USER',
       10,
     );
-    this.immediateRemoval = this.configService.get<boolean>(
-      'REMOVE_FILE_AFTER_RIGHT_DOWNLOAD',
-      true,
-    );
-    this.maxCachedPerUser = this.configService.get<number>(
-      'MAX_CACHED_PER_USER',
-      10,
-    );
     this.maxBitrate = this.configService.get<number>(
       'MAX_BITRATE',
       2000000,
@@ -77,6 +69,9 @@ export class AppService {
     if (this.forceAllDownloadsToH265 === true){
       url = url
       .replace(/VideoCodec=h264/g, "VideoCodec=h265")
+    }
+    if (this.maxBitrate !== 0){
+      url = url
       .replace(/VideoBitrate=\d+/g, `VideoBitrate=${this.maxBitrate}`);
     }
     this.logger.error(url)
