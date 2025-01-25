@@ -70,7 +70,7 @@ export class AppService {
       url = url
       .replace(/VideoCodec=h264/g, "VideoCodec=h265")
     }
-    if (this.maxBitrate !== 0){
+    if (this.maxBitrate > 0){
       url = url
       .replace(/VideoBitrate=\d+/g, `VideoBitrate=${this.maxBitrate}`);
     }
