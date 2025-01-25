@@ -70,10 +70,16 @@ export class AppService {
       url = url
       .replace(/VideoCodec=h264/g, "VideoCodec=h265")
     }
-    if (this.maxBitrate > 0){
-      url = url
-      .replace(/VideoBitrate=\d+/g, `VideoBitrate=${this.maxBitrate}`);
+    if (this.maxBitrate > 0) {
+      const match = url.match(/VideoBitrate=(\d+)/);
+      if (match) {
+        const oldBitrate = parseInt(match[1], 10);
+        this.logger.error(oldBitrate)
+        const newBitrate = Math.min(oldBitrate, this.maxBitrate);
+        url = url.replace(/VideoBitrate=\d+/, `VideoBitrate=${newBitrate}`);
+      }
     }
+    
     this.logger.error(url)
     return url
   }
