@@ -58,7 +58,7 @@ export class AppService {
     );
     this.maxBitrate = this.configService.get<number>(
       'MAX_BITRATE',
-      2000000,
+      0,
     );
     this.immediateRemoval = this.configService.get<string>('REMOVE_FILE_AFTER_RIGHT_DOWNLOAD', 'false').toLowerCase() === 'true';
 
