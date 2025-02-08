@@ -447,7 +447,7 @@ export class AppService {
         const mediaSource = data.MediaSources[0];
 
         return (mediaSource?.MediaStreams || [])
-            .filter((stream: any) => stream.Type === "Subtitle") // Only subtitles
+            .filter((stream: any) => stream.Type === "Subtitle" && stream.IsExternal) // Only subtitles
             .map((stream: any) => ({
                 index: stream.Index,
                 language: stream.Language || 'und',
