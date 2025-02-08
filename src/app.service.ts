@@ -40,6 +40,8 @@ export class AppService {
   private immediateRemoval: boolean;
   private forceAllDownloadsToH265: boolean;
   private maxBitrate: number;
+  private ApiKey: string;
+  private extension: string = 'matroska'
   
   constructor(
     private logger: Logger,
@@ -62,26 +64,9 @@ export class AppService {
     );
     this.immediateRemoval = this.configService.get<string>('REMOVE_FILE_AFTER_RIGHT_DOWNLOAD', 'false').toLowerCase() === 'true';
 
-    this.forceAllDownloadsToH265 = this.configService.get<string>('FORCE_ALL_DOWNLOADS_TO_H265', 'false').toLowerCase() === 'true';
-  }
-
-  urlEditor(url: string):string{
-    if (this.forceAllDownloadsToH265 === true){
-      url = url
-      .replace(/VideoCodec=h264/g, "VideoCodec=h265")
-    }
-    if (this.maxBitrate > 0) {
-      const match = url.match(/VideoBitrate=(\d+)/);
-      if (match) {
-        const oldBitrate = parseInt(match[1], 10);
-        this.logger.error(oldBitrate)
-        const newBitrate = Math.min(oldBitrate, this.maxBitrate);
-        url = url.replace(/VideoBitrate=\d+/, `VideoBitrate=${newBitrate}`);
-      }
-    }
-    
-    this.logger.error(url)
-    return url
+    this.ApiKey = this.configService.get<string>(
+      'JELLYFIN_API_KEY',
+    );
   }
 
   async downloadAndCombine(
@@ -93,11 +78,10 @@ export class AppService {
     item: any,
   ): Promise<string> {
     const jobId = uuidv4();
-    const outputPath = path.join(this.cacheDir, `combined_${jobId}.mp4`);
+    const outputPath = path.join(this.cacheDir, `combined_${jobId}.mkv`);
     this.logger.log(
       `Queueing job ${jobId.padEnd(36)} | URL: ${(url.slice(0, 50) + '...').padEnd(53)} | Path: ${outputPath}`,
     );
-    url = this.urlEditor(url)
 
     this.activeJobs.push({
       id: jobId,
@@ -375,36 +359,123 @@ export class AppService {
     }  
   }
 
-  private startJob(jobId: string) {
+  private async startJob(jobId: string) { // Add "async" to the function
     const job = this.activeJobs.find((job) => job.id === jobId);
     if (job) {
-      job.status = 'optimizing';
-      this.handleOptimizationHistory(job)
-      const ffmpegArgs = this.getFfmpegArgs(job.inputUrl, job.outputPath);
-      this.startFFmpegProcess(jobId, ffmpegArgs)
-        .finally(() => {
-          // This runs after the returned Promise resolves or rejects.
-          this.checkQueue();
-        });
-      this.logger.log(`Started job ${jobId}`);
+        job.status = 'optimizing';
+        this.handleOptimizationHistory(job);
+
+        try {
+            // Await the Promise to ensure subtitles are loaded before FFmpeg starts
+            const ffmpegArgs = await this.getFfmpegArgs(job.inputUrl, job.itemId, job.outputPath);
+            // this.logger.log(ffmpegArgs)
+            // Now FFmpeg will start with the correct arguments
+            await this.startFFmpegProcess(jobId, ffmpegArgs)
+            .finally(() => {this.checkQueue()});
+
+        } catch (error) {
+            this.logger.error(`Error processing job ${jobId}:`, error);
+        }
+        this.logger.log(`Started job ${jobId}`);
     }
   }
 
-  private getFfmpegArgs(inputUrl: string, outputPath: string): string[] {
-    return [
-      '-i',
-      inputUrl,
-      '-c',
-      'copy', // Copy both video and audio without re-encoding
-      '-movflags',
-      '+faststart', // Optimize for web streaming
-      '-f',
-      'mp4', // Force MP4 container
-      outputPath,
-    ];
+  private async getFfmpegArgs(
+    inputUrl: string,
+    mediaSourceId: string,
+    outputPath: string
+  ): Promise<string[]> {
+    // Get available subtitles and log them
+    const subtitleStreams = await this.getAvailableSubtitles(mediaSourceId);
+    // this.logger.log(subtitleStreams);
+  
+    // Start with the main video input
+    const ffmpegArgs: string[] = ['-i', inputUrl];
+  
+    // Collect valid subtitle inputs and add each as an input
+    const validSubs: { path: string; language: string }[] = [];
+    for (const sub of subtitleStreams) {
+      const localSubtitlePath = await this.fetchLocalSubtitle(mediaSourceId, sub.filePath);
+      if (!localSubtitlePath) {
+        this.logger.warn(`Skipping missing subtitle: ${sub.filePath}`);
+        continue;
+      }
+      validSubs.push({ path: localSubtitlePath, language: sub.language || 'und' });
+      ffmpegArgs.push('-i', localSubtitlePath);
+    }
+  
+    // Map main video and audio from input 0 (ignores missing streams)
+    ffmpegArgs.push('-map', '0:v?', '-map', '0:a?');
+  
+    // Map each subtitle input (they become inputs 1, 2, …)
+    validSubs.forEach((sub, index) => {
+      // Map first stream from each subtitle file
+      ffmpegArgs.push('-map', `${index + 1}:0`);
+      ffmpegArgs.push('-metadata:s:s:' + index, `language=${sub.language}`);
+    });
+  
+    // Set codecs to copy streams directly (no re-encoding)
+    ffmpegArgs.push('-c:v', 'copy', '-c:a', 'copy');
+    if (validSubs.length > 0) {
+      ffmpegArgs.push('-c:s', 'copy');
+    }
+  
+    // Set output container to MKV (removing the unnecessary movflags for MP4)
+    ffmpegArgs.push('-f', this.extension, outputPath);
+    return ffmpegArgs;
+  }
+  
+
+  private async getAvailableSubtitles(mediaSourceId: string): Promise<{ index: number, language: string, filePath: string }[]> {
+    const subtitlesApiUrl = `https://jellyfin.geraldserver.nl/Items/${mediaSourceId}/PlaybackInfo?api_key=${this.ApiKey}`;
+    this.logger.log(`Fetching subtitles from: ${subtitlesApiUrl}`);
+
+    try {
+        const response = await fetch(subtitlesApiUrl);
+        const data = await response.json();
+
+        if (!data.MediaSources || data.MediaSources.length === 0) {
+            throw new Error("No media sources found.");
+        }
+
+        const mediaSource = data.MediaSources[0];
+
+        return (mediaSource?.MediaStreams || [])
+            .filter((stream: any) => stream.Type === "Subtitle") // Only subtitles
+            .map((stream: any) => ({
+                index: stream.Index,
+                language: stream.Language || 'und',
+                filePath: stream.Path, // Return the real subtitle file path
+            }));
+    } catch (error) {
+        console.error('Error fetching subtitles:', error);
+        return [];
+    }
   }
 
-  
+  private async fetchLocalSubtitle(mediaSourceId: string, subtitlePath: string): Promise<string> {
+    // Construct the local destination path
+    // subtitlePath = path.join('//192.168.1.120', subtitlePath);
+
+    const localPath = path.join(__dirname, `../cache/${mediaSourceId}_${path.basename(subtitlePath)}`);
+
+    try {
+        // Ensure the source subtitle file exists
+        if (!fs.existsSync(subtitlePath)) {
+            throw new Error(`Subtitle file not found: ${subtitlePath}`);
+        }
+
+        // Copy the subtitle file to the cache location
+        fs.copyFileSync(subtitlePath, localPath);
+        this.logger.log(`Subtitle copied to: ${localPath}`);
+
+        return localPath; // Return the new local path
+    } catch (error) {
+        console.error(`Error copying subtitle: ${subtitlePath}`, error);
+        return ""; // Return empty string if failed
+    }
+  }
+
   private async startFFmpegProcess(
     jobId: string,
     ffmpegArgs: string[],
