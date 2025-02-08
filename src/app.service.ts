@@ -38,10 +38,7 @@ export class AppService {
   private maxCachedPerUser: number;
   private cacheDir: string;
   private immediateRemoval: boolean;
-  private forceAllDownloadsToH265: boolean;
-  private maxBitrate: number;
   private ApiKey: string;
-  private extension: string = 'matroska'
   private jellyfinURL: string
   
   constructor(
@@ -58,10 +55,6 @@ export class AppService {
     this.maxCachedPerUser = this.configService.get<number>(
       'MAX_CACHED_PER_USER',
       10,
-    );
-    this.maxBitrate = this.configService.get<number>(
-      'MAX_BITRATE',
-      0,
     );
     this.immediateRemoval = this.configService.get<string>('REMOVE_FILE_AFTER_RIGHT_DOWNLOAD', 'false').toLowerCase() === 'true';
 
@@ -391,71 +384,128 @@ export class AppService {
     outputPath: string,
     videoDuration: number
   ): Promise<string[]> {
-    // Get available subtitles and log them
-    const subtitleStreams = await this.getAvailableSubtitles(mediaSourceId);
-    // Start with the main video input
-    const ffmpegArgs: string[] = ['-i', inputUrl];
+    // 1) We'll build ffmpegArgs step by step
+    const ffmpegArgs: string[] = [];
   
-    // Collect valid subtitle inputs and add each as an input
-    const validSubs: { path: string; language: string }[] = [];
-    for (const sub of subtitleStreams) {
-      const localSubtitlePath = await this.fetchLocalSubtitle(mediaSourceId, sub.filePath, videoDuration);
-      if (!localSubtitlePath) {
-        this.logger.warn(`Skipping missing subtitle: ${sub.filePath}`);
+    // 2) Input #0 = HLS
+    ffmpegArgs.push('-i', inputUrl);
+  
+    // 3) Get the original file path so we can copy internal subs
+    const subtitlesApiUrl = `${this.jellyfinURL}/Items/${mediaSourceId}/PlaybackInfo?api_key=${this.ApiKey}`;
+    let originalFilePath: string | null = null;
+  
+    try {
+      const resp = await fetch(subtitlesApiUrl);
+      const data = await resp.json();
+      const mediaSource = data.MediaSources?.[0];
+      if (mediaSource?.Path) {
+        this.logger.error(mediaSource.Path)
+        originalFilePath = mediaSource.Path;
+      }
+    } catch (err) {
+      this.logger.warn(`Could not fetch original file for ID ${mediaSourceId}: ${err}`);
+    }
+  
+    // If we have a valid original file path, add it as input #1
+    let internalSubsIndex = -1;
+    if (originalFilePath) {
+      ffmpegArgs.push('-i', originalFilePath);
+      internalSubsIndex = 1;
+    }
+  
+    // 4) Now, get the subtitle streams
+    const allSubStreams = await this.getAvailableSubtitles(mediaSourceId);
+  
+    // We'll store just the external subs here
+    const externalSubs: { path: string; language: string }[] = [];
+  
+    // 5) Separate internal from external
+    for (const sub of allSubStreams) {
+      if (!sub.isExternal) {
+        // It's an internal/embedded sub, so we'll rely on `-map 1:s?`
         continue;
       }
-      validSubs.push({ path: localSubtitlePath, language: sub.language || 'und' });
-      ffmpegArgs.push('-i', localSubtitlePath);
+      // It's external
+      const localSubtitlePath = await this.fetchLocalSubtitle(mediaSourceId, sub.filePath, videoDuration);
+      if (!localSubtitlePath) {
+        this.logger.warn(`Skipping missing external subtitle: ${sub.filePath}`);
+        continue;
+      }
+      externalSubs.push({ path: localSubtitlePath, language: sub.language || 'und' });
     }
   
-    // Map main video and audio from input 0 (ignores missing streams)
-    ffmpegArgs.push('-map', '0:v?', '-map', '0:a?');
-  
-    // Map each subtitle input (they become inputs 1, 2, …)
-    validSubs.forEach((sub, index) => {
-      ffmpegArgs.push('-map', `${index + 1}:0`);
-      ffmpegArgs.push(`-metadata:s:s:${index}`, `language=${sub.language}`);
+    // 6) Add each external subtitle file as an FFmpeg input
+    externalSubs.forEach(({ path }) => {
+      ffmpegArgs.push('-i', path);
     });
   
-    // Set codecs to copy streams directly (no re-encoding)
-    ffmpegArgs.push('-c:v', 'copy', '-c:a', 'copy');
-    if (validSubs.length > 0) {
-      ffmpegArgs.push('-c:s', 'copy');
+    // 7) Map video + audio from HLS (input #0)
+    ffmpegArgs.push('-map', '0:v?', '-map', '0:a?');
+  
+    // 8) If we have the original file, map all internal subs from input #1
+    if (internalSubsIndex >= 0) {
+      ffmpegArgs.push(`-map`, `${internalSubsIndex}:s?`);
     }
   
-    // Set output container to MKV
-    ffmpegArgs.push('-f', this.extension, outputPath);
+    // 9) Map each external sub
+    //    If we used input #1 for internal subs, external subs start at #2
+    //    If we have no original file, they'd start at #1
+    const firstExtIndex = internalSubsIndex >= 0 ? 2 : 1;
+    externalSubs.forEach(({ language }, i) => {
+      ffmpegArgs.push('-map', `${firstExtIndex + i}:0`);
+      ffmpegArgs.push(`-metadata:s:s:${i}`, `language=${language}`);
+    });
   
-    this.logger.log(ffmpegArgs);
+    // 10) Copy all streams without re-encoding
+    ffmpegArgs.push('-c:v', 'copy', '-c:a', 'copy', '-c:s', 'copy');
+  
+    // 11) Final container
+    ffmpegArgs.push('-f', "matroska", outputPath);
+  
+    this.logger.debug(ffmpegArgs);
     return ffmpegArgs;
   }
-  
-  
-
-  private async getAvailableSubtitles(mediaSourceId: string): Promise<{ index: number, language: string, filePath: string }[]> {
+    
+  private async getAvailableSubtitles(
+    mediaSourceId: string
+  ): Promise<Array<{ 
+    index: number;
+    language: string;
+    filePath?: string;    // might be undefined for internal subs
+    isExternal: boolean;
+  }>> {
     const subtitlesApiUrl = `${this.jellyfinURL}/Items/${mediaSourceId}/PlaybackInfo?api_key=${this.ApiKey}`;
     this.logger.log(`Fetching subtitles from: ${subtitlesApiUrl}`);
-
+  
     try {
-        const response = await fetch(subtitlesApiUrl);
-        const data = await response.json();
-
-        if (!data.MediaSources || data.MediaSources.length === 0) {
-            throw new Error("No media sources found.");
-        }
-
-        const mediaSource = data.MediaSources[0];
-
-        return (mediaSource?.MediaStreams || [])
-            .filter((stream: any) => stream.Type === "Subtitle" && stream.IsExternal) // Only subtitles
-            .map((stream: any) => ({
-                index: stream.Index,
-                language: stream.Language || 'und',
-                filePath: stream.Path, // Return the real subtitle file path
-            }));
+      const response = await fetch(subtitlesApiUrl);
+      const data = await response.json();
+      this.logger.debug(data)
+      if (!data.MediaSources || data.MediaSources.length === 0) {
+        throw new Error("No media sources found.");
+      }
+  
+      const mediaSource = data.MediaSources[0];
+  
+      // Now we filter only by Type === "Subtitle", no longer ignoring .IsExternal
+      const allSubtitleStreams = (mediaSource?.MediaStreams || [])
+      .filter((stream: any) => stream.Type === "Subtitle")
+      .map((stream: any) => {
+        const isExternal = !!stream.IsExternal;
+        return {
+          index: stream.Index,
+          language: stream.Language || 'und',
+          // For external subs, use the subtitle's own Path
+          // For internal subs, use the MediaSource's overall file path
+          filePath: isExternal ? stream.Path : mediaSource.Path,
+          isExternal
+        };
+      });
+  
+      return allSubtitleStreams;
     } catch (error) {
-        console.error('Error fetching subtitles:', error);
-        return [];
+      this.logger.error('Error fetching subtitles:', error);
+      return [];
     }
   }
 
