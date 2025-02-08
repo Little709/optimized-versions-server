@@ -42,6 +42,7 @@ export class AppService {
   private maxBitrate: number;
   private ApiKey: string;
   private extension: string = 'matroska'
+  private jellyfinURL: string
   
   constructor(
     private logger: Logger,
@@ -66,6 +67,9 @@ export class AppService {
 
     this.ApiKey = this.configService.get<string>(
       'JELLYFIN_API_KEY',
+    );
+    this.jellyfinURL = this.configService.get<string>(
+      'JELLYFIN_URL',
     );
   }
 
@@ -366,8 +370,9 @@ export class AppService {
         this.handleOptimizationHistory(job);
 
         try {
+            await this.getVideoDuration(job.inputUrl, jobId);
             // Await the Promise to ensure subtitles are loaded before FFmpeg starts
-            const ffmpegArgs = await this.getFfmpegArgs(job.inputUrl, job.itemId, job.outputPath);
+            const ffmpegArgs = await this.getFfmpegArgs(job.inputUrl, job.itemId, job.outputPath,this.videoDurations.get(jobId));
             // this.logger.log(ffmpegArgs)
             // Now FFmpeg will start with the correct arguments
             await this.startFFmpegProcess(jobId, ffmpegArgs)
@@ -383,19 +388,18 @@ export class AppService {
   private async getFfmpegArgs(
     inputUrl: string,
     mediaSourceId: string,
-    outputPath: string
+    outputPath: string,
+    videoDuration: number
   ): Promise<string[]> {
     // Get available subtitles and log them
     const subtitleStreams = await this.getAvailableSubtitles(mediaSourceId);
-    // this.logger.log(subtitleStreams);
-  
     // Start with the main video input
     const ffmpegArgs: string[] = ['-i', inputUrl];
   
     // Collect valid subtitle inputs and add each as an input
     const validSubs: { path: string; language: string }[] = [];
     for (const sub of subtitleStreams) {
-      const localSubtitlePath = await this.fetchLocalSubtitle(mediaSourceId, sub.filePath);
+      const localSubtitlePath = await this.fetchLocalSubtitle(mediaSourceId, sub.filePath, videoDuration);
       if (!localSubtitlePath) {
         this.logger.warn(`Skipping missing subtitle: ${sub.filePath}`);
         continue;
@@ -409,9 +413,8 @@ export class AppService {
   
     // Map each subtitle input (they become inputs 1, 2, …)
     validSubs.forEach((sub, index) => {
-      // Map first stream from each subtitle file
       ffmpegArgs.push('-map', `${index + 1}:0`);
-      ffmpegArgs.push('-metadata:s:s:' + index, `language=${sub.language}`);
+      ffmpegArgs.push(`-metadata:s:s:${index}`, `language=${sub.language}`);
     });
   
     // Set codecs to copy streams directly (no re-encoding)
@@ -420,14 +423,17 @@ export class AppService {
       ffmpegArgs.push('-c:s', 'copy');
     }
   
-    // Set output container to MKV (removing the unnecessary movflags for MP4)
+    // Set output container to MKV
     ffmpegArgs.push('-f', this.extension, outputPath);
+  
+    this.logger.log(ffmpegArgs);
     return ffmpegArgs;
   }
   
+  
 
   private async getAvailableSubtitles(mediaSourceId: string): Promise<{ index: number, language: string, filePath: string }[]> {
-    const subtitlesApiUrl = `https://jellyfin.geraldserver.nl/Items/${mediaSourceId}/PlaybackInfo?api_key=${this.ApiKey}`;
+    const subtitlesApiUrl = `${this.jellyfinURL}/Items/${mediaSourceId}/PlaybackInfo?api_key=${this.ApiKey}`;
     this.logger.log(`Fetching subtitles from: ${subtitlesApiUrl}`);
 
     try {
@@ -453,35 +459,95 @@ export class AppService {
     }
   }
 
-  private async fetchLocalSubtitle(mediaSourceId: string, subtitlePath: string): Promise<string> {
-    // Construct the local destination path
-    // subtitlePath = path.join('//192.168.1.120', subtitlePath);
-
+  private async fetchLocalSubtitle(
+    mediaSourceId: string,
+    subtitlePath: string,
+    videoDuration: number
+  ): Promise<string> {
+    // Construct local path (replace any network path logic as needed)
     const localPath = path.join(__dirname, `../cache/${mediaSourceId}_${path.basename(subtitlePath)}`);
-
+  
     try {
-        // Ensure the source subtitle file exists
-        if (!fs.existsSync(subtitlePath)) {
-            throw new Error(`Subtitle file not found: ${subtitlePath}`);
-        }
-
-        // Copy the subtitle file to the cache location
-        fs.copyFileSync(subtitlePath, localPath);
-        this.logger.log(`Subtitle copied to: ${localPath}`);
-
-        return localPath; // Return the new local path
+      if (!fs.existsSync(subtitlePath)) {
+        throw new Error(`Subtitle file not found: ${subtitlePath}`);
+      }
+  
+      // Read the existing SRT file
+      let subtitleContent = fs.readFileSync(subtitlePath, 'utf8');
+  
+      // Get last subtitle index
+      const lastIndex = this.getLastSubtitleIndex(subtitleContent);
+  
+      // Get the last subtitle timestamp
+      const lastTimestamp = this.getLastSubtitleTimestamp(subtitleContent);
+  
+      // If there's no trailing newline, add one
+      if (!subtitleContent.endsWith('\n')) {
+        subtitleContent += '\n';
+      }
+  
+      // If subtitles end too soon, add a blank subtitle at the end
+      if (lastTimestamp < videoDuration - 2) {
+        const blankSubtitleIndex = lastIndex + 1;
+        const startTime = this.formatSrtTimestamp(videoDuration - 1);
+        const endTime   = this.formatSrtTimestamp(videoDuration);
+        // Append a new subtitle block using the next index
+        subtitleContent += `\n${blankSubtitleIndex}\n${startTime} --> ${endTime}\n.\n`;
+      }
+  
+      // Save the updated subtitle file
+      fs.writeFileSync(localPath, subtitleContent, 'utf8');
+      this.logger.log(`Subtitle adjusted and saved to: ${localPath}`);
+  
+      return localPath;
     } catch (error) {
-        console.error(`Error copying subtitle: ${subtitlePath}`, error);
-        return ""; // Return empty string if failed
+      console.error(`Error modifying subtitle: ${subtitlePath}`, error);
+      return '';
     }
   }
+  
+  // Helper to grab the largest subtitle index in the file
+  private getLastSubtitleIndex(srtContent: string): number {
+    const lines = srtContent.split('\n');
+    let maxIndex = 0;
+    for (const line of lines) {
+      const num = parseInt(line.trim(), 10);
+      if (!isNaN(num) && num > maxIndex) {
+        maxIndex = num;
+      }
+    }
+    return maxIndex;
+  }
+  
+  // Helper to find the last timestamp in seconds
+  private getLastSubtitleTimestamp(srtContent: string): number {
+    const matches = srtContent.match(/(\d{2}:\d{2}:\d{2},\d{3}) --> (\d{2}:\d{2}:\d{2},\d{3})/g);
+    if (!matches) return 0;
+    const lastMatch = matches[matches.length - 1].split(' --> ')[1];
+    return this.srtTimestampToSeconds(lastMatch);
+  }
+  
+  // Convert SRT timestamp to total seconds
+  private srtTimestampToSeconds(timestamp: string): number {
+    // "HH:MM:SS,mmm" -> split by : then convert to float after replacing comma
+    const [h, m, s] = timestamp.replace(',', '.').split(':').map(parseFloat);
+    return h * 3600 + m * 60 + s;
+  }
+  
+  // Format seconds to SRT "HH:MM:SS,mmm" style
+  private formatSrtTimestamp(seconds: number): string {
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = (seconds % 60).toFixed(3).replace('.', ',');
+    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(6, '0')}`;
+  }
+
 
   private async startFFmpegProcess(
     jobId: string,
     ffmpegArgs: string[],
   ): Promise<void> {
     try {
-      await this.getVideoDuration(ffmpegArgs[1], jobId);
 
       return new Promise((resolve, reject) => {
         const ffmpegProcess = spawn('ffmpeg', ffmpegArgs, { stdio: ['pipe', 'pipe', 'pipe']});
