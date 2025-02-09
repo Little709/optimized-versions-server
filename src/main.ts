@@ -21,8 +21,9 @@ async function bootstrap() {
     // Optionally, you can choose to exit the process if the Jellyfin server is unreachable
     // process.exit(1);
   }
+  const  listenport = Number(process.env.LISTEN_PORT) || 3000;
 
-  await app.listen(3000);
+  await app.listen(listenport);
   logger.log(`Application is running on: ${await app.getUrl()}`);
 }
 bootstrap();
