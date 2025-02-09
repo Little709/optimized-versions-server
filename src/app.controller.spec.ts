@@ -57,7 +57,7 @@ describe('AppController', () => {
   describe('downloadTranscodedFile', () => {
     it('should download file successfully', async () => {
       const id = 'abc123';
-      const filePath = '/path/to/file.mp4';
+      const filePath = '/path/to/file.mkv';
       const mockResponse = {
         setHeader: jest.fn(),
         on: jest.fn().mockImplementation((event, callback) => {

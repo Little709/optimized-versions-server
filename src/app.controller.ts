@@ -119,7 +119,7 @@ export class AppController {
 
     const stat = fs.statSync(filePath);
     res.setHeader('Content-Length', stat.size);
-    res.setHeader('Content-Type', 'video/mkv');
+    res.setHeader('Content-Type', 'video/x-mastroka');
     res.setHeader(
       'Content-Disposition',
       `attachment; filename=transcoded_${id}.mkv`,
@@ -138,6 +138,7 @@ export class AppController {
         resolve(null);
       });
 
+      
       fileStream.on('error', (err) => {
         // Handle errors during file streaming
         this.logger.error(`Error streaming file ${filePath}: ${err.message}`);
