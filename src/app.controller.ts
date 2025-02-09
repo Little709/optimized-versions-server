@@ -124,9 +124,44 @@ export class AppController {
       'Content-Disposition',
       `attachment; filename=transcoded_${id}.mkv`,
     );
-    const fileStream = fs.createReadStream(filePath);
+    let chunkSize = Number(process.env.CHUNK_SIZE_IN_BYTES) || 262144;
+
+    const fileStream = fs.createReadStream(filePath, { highWaterMark: chunkSize });
     
     this.logger.log(`Download started for ${filePath}`)
+
+    let bytesSent = 0;
+    let lastLoggedTime = Date.now();
+    const throttleInterval = 15 * 1000; // log at most once per 15 seconds
+    const startTime = Date.now();
+  
+    fileStream.on('data', (chunk) => {
+      bytesSent += chunk.length;
+      const now = Date.now();
+  
+      if (now - lastLoggedTime >= throttleInterval) {
+        // Calculate elapsed time in seconds
+        const elapsedSeconds = (now - startTime) / 1000;
+        // Calculate throughput in bytes/sec and convert to MB/s
+        const speedBytesPerSec = bytesSent / elapsedSeconds;
+        const speedMBps = speedBytesPerSec / (1024 * 1024);
+        // Estimate remaining time (in seconds)
+        const remainingBytes = stat.size - bytesSent;
+        const estimatedRemainingSecs = speedBytesPerSec > 0
+          ? remainingBytes / speedBytesPerSec
+          : 0;
+        // Calculate percentage complete
+        const percentage = (bytesSent / stat.size) * 100;
+        
+        this.logger.log(
+          `Download progress: ${percentage.toFixed(2)}% | ` +
+          `${speedMBps.toFixed(2)} MB/s | ` +
+          `~${estimatedRemainingSecs.toFixed(0)} sec remaining`
+        );
+        
+        lastLoggedTime = now;
+      }
+    });
 
     return new Promise((resolve, reject) => {
       fileStream.pipe(res);
