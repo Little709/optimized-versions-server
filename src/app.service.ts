@@ -91,8 +91,16 @@ export class AppService {
       `Queueing job ${jobId.padEnd(36)} | URL: ${(url.slice(0, 50) + '...').padEnd(53)} | Path: ${outputPath}`,
     );
 
-    const isTranscoded = url.includes("TranscodeReasons=") && !url.includes("TranscodeReasons=" + encodeURIComponent(""));
+    const isTranscoded = url.includes("TranscodeReasons=")
+    // this.logger.log(`url: ${url}`)
     url = this.urlEditor(url)
+    // Improved logging with structured message
+    // this.logger.debug({
+    //   message: "Transcoding Check",
+    //   isTranscoded: isTranscoded,
+    //   url: url,
+    // });
+
     this.activeJobs.push({
       id: jobId,
       status: 'queued',
@@ -106,7 +114,6 @@ export class AppService {
       size: 0,
       isDirectPlay: !isTranscoded,
     });
-
     this.jobQueue.push(jobId);
     this.checkQueue(); // Check if we can start the job immediately
 
@@ -334,7 +341,7 @@ export class AppService {
     for (const index in this.jobQueue) {
       const nextJobId = this.jobQueue[index]; // Access job ID by index
       let nextJob: Job = this.activeJobs.find((job) => job.id === nextJobId);
-      if(runningJobs < this.maxConcurrentJobs + 1 && nextJob.isDirectPlay === false){
+      if(runningJobs == 1 && nextJob.isDirectPlay === false){
         continue // direct play should always be possible, look for the first directplay item in queue and allow that one.
       }
       else if (runningJobs >= this.maxConcurrentJobs+1) {
@@ -487,7 +494,7 @@ export class AppService {
   }>> {
     const subtitlesApiUrl = `${this.jellyfinURL}/Items/${mediaSourceId}/PlaybackInfo?api_key=${this.ApiKey}`;
     this.logger.log(`Fetching subtitles from: ${subtitlesApiUrl}`);
-  
+    
     try {
       const response = await fetch(subtitlesApiUrl);
       const data = await response.json();
@@ -497,12 +504,14 @@ export class AppService {
       }
   
       const mediaSource = data.MediaSources[0];
-  
+      const pathTranslator = process.env.PATH_TRANSLATOR || "";
+      mediaSource.Path = path.join(pathTranslator,mediaSource.Path)
       // Now we filter only by Type === "Subtitle", no longer ignoring .IsExternal
       const allSubtitleStreams = (mediaSource?.MediaStreams || [])
       .filter((stream: any) => stream.Type === "Subtitle")
       .map((stream: any) => {
         const isExternal = !!stream.IsExternal;
+        stream.Path = path.join(pathTranslator,stream.Path)
         return {
           index: stream.Index,
           language: stream.Language || 'und',
