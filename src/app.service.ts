@@ -413,21 +413,33 @@ export class AppService {
     inputUrl: string,
     mediaSourceId: string,
     outputPath: string,
-    subtitleIncluded : boolean
+    subtitleIncluded: boolean
   ): Promise<string[]> {
     const ffmpegArgs: string[] = [];
   
     // Input 0: the HLS stream
     ffmpegArgs.push('-i', inputUrl);
   
+    // If subtitles are already included, skip subtitle handling
+    if (subtitleIncluded) {
+      this.logger.debug('Subtitles already included, skipping subtitle handling.');
+      // Map video and audio from the HLS input (#0)
+      ffmpegArgs.push('-map', '0:v?', '-map', '0:a?');
+  
+      // Copy all streams without re-encoding and output as matroska
+      ffmpegArgs.push('-c:v', 'copy', '-c:a', 'copy', '-f', 'matroska', outputPath);
+  
+      this.logger.debug(ffmpegArgs);
+      return ffmpegArgs;
+    }
+  
     // Get all subtitle streams
     const allSubStreams = await this.getAvailableSubtitles(mediaSourceId);
   
     // Check if any internal (embedded) subtitles exist
-    const hasInternalSubs = allSubStreams.some(sub => !sub.isExternal);
+    const hasInternalSubs = allSubStreams.some((sub) => !sub.isExternal);
     let internalSubsIndex = -1;
-
-    if (hasInternalSubs && !subtitleIncluded) {
+    if (hasInternalSubs) {
       // Only fetch the original file path if we need internal subs
       const subtitlesApiUrl = `${this.jellyfinURL}/Items/${mediaSourceId}/PlaybackInfo?api_key=${this.ApiKey}`;
       let originalFilePath: string | null = null;
@@ -450,19 +462,17 @@ export class AppService {
   
     // Process external subtitles (those with isExternal true)
     const externalSubs: { path: string; language: string }[] = [];
-    if(!subtitleIncluded){
-      for (const sub of allSubStreams) {
-        if (!sub.isExternal) continue;
-        const localSubtitlePath = sub.filePath
+    for (const sub of allSubStreams) {
+      if (!sub.isExternal) continue;
+      const localSubtitlePath = sub.filePath;
   
-        if (!localSubtitlePath) {
-          this.logger.warn(`Skipping missing external subtitle: ${sub.filePath}`);
-          continue;
-        }
-        externalSubs.push({ path: localSubtitlePath, language: sub.language || 'und' });
+      if (!localSubtitlePath) {
+        this.logger.warn(`Skipping missing external subtitle: ${sub.filePath}`);
+        continue;
       }
+      externalSubs.push({ path: localSubtitlePath, language: sub.language || 'und' });
     }
-    
+  
     // Add each external subtitle file as an FFmpeg input.
     externalSubs.forEach(({ path }) => {
       ffmpegArgs.push('-i', path);
@@ -492,6 +502,7 @@ export class AppService {
     this.logger.debug(ffmpegArgs);
     return ffmpegArgs;
   }
+  
   
     
   private async getAvailableSubtitles(
