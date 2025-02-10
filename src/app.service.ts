@@ -26,6 +26,7 @@ export interface Job {
   item: any;
   speed?: number;
   isDirectPlay: boolean;
+  subtitleIncluded: boolean;
 }
 
 @Injectable()
@@ -92,6 +93,8 @@ export class AppService {
     );
 
     const isTranscoded = url.includes("TranscodeReasons=")
+    const hasSubs = url.includes("SubtitleMethod=")
+
     // this.logger.log(`url: ${url}`)
     url = this.urlEditor(url)
     // Improved logging with structured message
@@ -113,6 +116,7 @@ export class AppService {
       timestamp: new Date(),
       size: 0,
       isDirectPlay: !isTranscoded,
+      subtitleIncluded: hasSubs
     });
     this.jobQueue.push(jobId);
     this.checkQueue(); // Check if we can start the job immediately
@@ -392,7 +396,7 @@ export class AppService {
         try {
             await this.getVideoDuration(job.inputUrl, jobId);
             // Await the Promise to ensure subtitles are loaded before FFmpeg starts
-            const ffmpegArgs = await this.getFfmpegArgs(job.inputUrl, job.itemId, job.outputPath,this.videoDurations.get(jobId));
+            const ffmpegArgs = await this.getFfmpegArgs(job.inputUrl, job.itemId, job.outputPath,job.subtitleIncluded);
             // this.logger.log(ffmpegArgs)
             // Now FFmpeg will start with the correct arguments
             await this.startFFmpegProcess(jobId, ffmpegArgs)
@@ -409,7 +413,7 @@ export class AppService {
     inputUrl: string,
     mediaSourceId: string,
     outputPath: string,
-    videoDuration: number
+    subtitleIncluded : boolean
   ): Promise<string[]> {
     const ffmpegArgs: string[] = [];
   
@@ -422,7 +426,7 @@ export class AppService {
     // Check if any internal (embedded) subtitles exist
     const hasInternalSubs = allSubStreams.some(sub => !sub.isExternal);
     let internalSubsIndex = -1;
-    if (hasInternalSubs) {
+    if (hasInternalSubs && !subtitleIncluded) {
       // Only fetch the original file path if we need internal subs
       const subtitlesApiUrl = `${this.jellyfinURL}/Items/${mediaSourceId}/PlaybackInfo?api_key=${this.ApiKey}`;
       let originalFilePath: string | null = null;
