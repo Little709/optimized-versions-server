@@ -41,6 +41,7 @@ export class AppService {
   private immediateRemoval: boolean;
   private ApiKey: string;
   private jellyfinURL: string
+  private forceAllDownloadsToH265: boolean;
   
   constructor(
     private logger: Logger,
@@ -65,6 +66,15 @@ export class AppService {
     this.jellyfinURL = this.configService.get<string>(
       'JELLYFIN_URL',
     );
+
+    this.forceAllDownloadsToH265 = this.configService.get<string>('FORCE_ALL_DOWNLOADS_TO_H265', 'false').toLowerCase() === 'true';
+  }
+
+  urlEditor(url){
+    if (this.forceAllDownloadsToH265 === true){
+      url = url.replace(/VideoCodec=h264/g, "VideoCodec=h265");
+    }
+    return url
   }
 
   async downloadAndCombine(
@@ -82,7 +92,7 @@ export class AppService {
     );
 
     const isTranscoded = url.includes("TranscodeReasons=") && !url.includes("TranscodeReasons=" + encodeURIComponent(""));
-
+    url = this.urlEditor(url)
     this.activeJobs.push({
       id: jobId,
       status: 'queued',
