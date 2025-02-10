@@ -426,7 +426,6 @@ export class AppService {
     // Check if any internal (embedded) subtitles exist
     const hasInternalSubs = allSubStreams.some(sub => !sub.isExternal);
     let internalSubsIndex = -1;
-
     if (hasInternalSubs && !subtitleIncluded) {
       // Only fetch the original file path if we need internal subs
       const subtitlesApiUrl = `${this.jellyfinURL}/Items/${mediaSourceId}/PlaybackInfo?api_key=${this.ApiKey}`;
