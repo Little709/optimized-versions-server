@@ -341,10 +341,13 @@ export class AppService {
     for (const index in this.jobQueue) {
       const nextJobId = this.jobQueue[index]; // Access job ID by index
       let nextJob: Job = this.activeJobs.find((job) => job.id === nextJobId);
-      if(runningJobs == 1 && nextJob.isDirectPlay === false){
+      const isRunningDirectPlay = this.activeJobs.some(
+        (job) => job.status === 'optimizing' && job.isDirectPlay === true
+      );
+      if(runningJobs == 1 && (nextJob.isDirectPlay === false || isRunningDirectPlay)){
         continue // direct play should always be possible, look for the first directplay item in queue and allow that one.
       }
-      else if (runningJobs >= this.maxConcurrentJobs+1) {
+      else if (runningJobs >= this.maxConcurrentJobs) {
         break; // Stop if max concurrent jobs are reached
       }
       
