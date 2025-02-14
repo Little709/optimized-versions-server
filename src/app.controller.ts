@@ -57,7 +57,6 @@ export class AppController {
     
     const id = await this.appService.downloadAndCombine(
       finalUrl,
-      fileExtension,
       deviceId,
       itemId,
       item,
@@ -124,9 +123,8 @@ export class AppController {
       'Content-Disposition',
       `attachment; filename=transcoded_${id}.mkv`,
     );
-    let chunkSize = Number(process.env.CHUNK_SIZE_IN_BYTES) || 262144;
 
-    const fileStream = fs.createReadStream(filePath, { highWaterMark: chunkSize });
+    const fileStream = fs.createReadStream(filePath);
     
     this.logger.log(`Download started for ${filePath}`)
 

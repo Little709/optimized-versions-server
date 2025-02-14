@@ -43,6 +43,7 @@ export class AppService {
   private ApiKey: string;
   private jellyfinURL: string
   private forceAllDownloadsToH265: boolean;
+  private allowExtraJobIfDirectPlay: boolean;
   
   constructor(
     private logger: Logger,
@@ -59,7 +60,9 @@ export class AppService {
       'MAX_CACHED_PER_USER',
       10,
     );
-    this.immediateRemoval = this.configService.get<string>('REMOVE_FILE_AFTER_RIGHT_DOWNLOAD', 'false').toLowerCase() === 'true';
+    this.immediateRemoval = this.configService.get<string>('REMOVE_FILE_AFTER_RIGHT_DOWNLOAD', 'true').toLowerCase() === 'true';
+
+    this.allowExtraJobIfDirectPlay = this.configService.get<string>('ALWAYS_ALLOW_ONE_DIRECT_PLAY', 'true').toLowerCase() === 'true';
 
     this.ApiKey = this.configService.get<string>(
       'JELLYFIN_API_KEY',
@@ -80,8 +83,6 @@ export class AppService {
 
   async downloadAndCombine(
     url: string,
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    fileExtension: string,
     deviceId: string,
     itemId: string,
     item: any,
@@ -93,7 +94,7 @@ export class AppService {
     );
 
     const isTranscoded = url.includes("TranscodeReasons=")
-    const hasSubs = !url.includes("subtitleStreamIndex=-1");
+    const hasSubs = (!url.includes("SubtitleStreamIndex=-1") && url.includes("SubtitleStreamIndex="));
 
     url = this.urlEditor(url)
 
@@ -338,10 +339,10 @@ export class AppService {
     for (const index in this.jobQueue) {
       const nextJobId = this.jobQueue[index]; // Access job ID by index
       let nextJob: Job = this.activeJobs.find((job) => job.id === nextJobId);
-      const isRunningDirectPlay = this.activeJobs.some(
+      const currentJobIsAlreadyDirectPlay = this.activeJobs.some(
         (job) => job.status === 'optimizing' && job.isDirectPlay === true
       );
-      if(runningJobs == 1 && (nextJob.isDirectPlay === false || isRunningDirectPlay)){
+      if((runningJobs == 1 && (!this.allowExtraJobIfDirectPlay || currentJobIsAlreadyDirectPlay || nextJob.isDirectPlay === false))){
         continue // direct play should always be possible, look for the first directplay item in queue and allow that one.
       }
       else if (runningJobs >= this.maxConcurrentJobs) {
