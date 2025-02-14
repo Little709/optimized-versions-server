@@ -93,16 +93,9 @@ export class AppService {
     );
 
     const isTranscoded = url.includes("TranscodeReasons=")
-    const hasSubs = url.includes("SubtitleMethod=")
+    const hasSubs = !url.includes("subtitleStreamIndex=-1");
 
-    // this.logger.log(`url: ${url}`)
     url = this.urlEditor(url)
-    // Improved logging with structured message
-    // this.logger.debug({
-    //   message: "Transcoding Check",
-    //   isTranscoded: isTranscoded,
-    //   url: url,
-    // });
 
     this.activeJobs.push({
       id: jobId,
