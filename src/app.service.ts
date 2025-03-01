@@ -431,7 +431,7 @@ export class AppService {
     let internalSubsIndex = -1;
   
     if (hasInternalSubs) {
-      const originalFilePath = await this.fetchOriginalFilePath(mediaSourceId);
+      const originalFilePath = path.join((process.env.PATH_TRANSLATOR || ""), (await this.fetchOriginalFilePath(mediaSourceId)))
       if (originalFilePath) {
         args.push('-i', originalFilePath);
         internalSubsIndex = 1; // Input #1 is the internal subtitle source
@@ -504,7 +504,7 @@ export class AppService {
     try {
       const response = await fetch(subtitlesApiUrl);
       const data = await response.json();
-      // this.logger.debug(data)
+      
       if (!data.MediaSources || data.MediaSources.length === 0) {
         throw new Error("No media sources found.");
       }
@@ -512,12 +512,13 @@ export class AppService {
       const mediaSource = data.MediaSources[0];
       const pathTranslator = process.env.PATH_TRANSLATOR || "";
       mediaSource.Path = path.join(pathTranslator,mediaSource.Path)
-      // Now we filter only by Type === "Subtitle", no longer ignoring .IsExternal
       const allSubtitleStreams = (mediaSource?.MediaStreams || [])
       .filter((stream: any) => stream.Type === "Subtitle")
       .map((stream: any) => {
         const isExternal = !!stream.IsExternal;
+        if(isExternal){
         stream.Path = path.join(pathTranslator,stream.Path)
+        }        
         return {
           index: stream.Index,
           language: stream.Language || 'und',
